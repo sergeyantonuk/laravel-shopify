@@ -17,6 +17,9 @@ use Osiset\ShopifyApp\Objects\Enums\DataSource;
 use Osiset\ShopifyApp\Objects\Values\NullShopDomain;
 use Osiset\ShopifyApp\Objects\Values\ShopDomain;
 use Osiset\ShopifyApp\Services\ShopSession;
+use Log;
+use Illuminate\Http\Response;
+use DB;
 
 /**
  * Response for ensuring an authenticated request.
@@ -70,10 +73,14 @@ class AuthShopify
         $domain = $this->getShopDomainFromRequest($request);
         $hmac = $this->verifyHmac($request);
 
+        ///Log::info('AuthVendor->handle-->', ['$hmac--' => $hmac]);
+
         $checks = [];
         if ($this->shopSession->guest()) {
+            ///Log::info('isGuest');
             if ($hmac === null) {
                 // Auth flow required if not yet logged in
+                ///Log::info('inside if handle guest---');
                 return $this->handleBadVerification($request, $domain);
             }
 
@@ -84,14 +91,17 @@ class AuthShopify
         // Verify the Shopify session token and verify the shop data
         array_push($checks, 'verifyShopifySessionToken', 'verifyShop');
 
+        ///Log::info('handle()->checks', ['cheks' => $checks]);
+
         // Loop all checks needing to be done, if we get a false, handle it
         foreach ($checks as $check) {
             $result = call_user_func([$this, $check], $request, $domain);
             if ($result === false) {
+                ///Log::info('insfrch--', ['$domain' => $domain]);
                 return $this->handleBadVerification($request, $domain);
             }
         }
-
+        ///Log::info('after foreach');
         return $next($request);
     }
 
@@ -121,6 +131,7 @@ class AuthShopify
         // Something didn't match
         throw new SignatureVerificationException('Unable to verify signature.');
     }
+
 
     /**
      * Login and verify the shop and it's data.
@@ -216,7 +227,26 @@ class AuthShopify
 
                 return $refererQueryParams['hmac'];
             },
+           //Own option
+           DataSource::DB()->toNative() => function () use ($request): ?string {
+
+                if (! $uniqueAuthId = $request->get('short_auth')) {
+                    return null;
+                }
+
+                if (! $authData = $this->getAuthDataDb($uniqueAuthId)) {
+                    return null;
+                }
+                $authData = json_decode($authData);
+
+                ///Log::info('getHmac->Db', ['$authDataDecoded' => $authData, 'authData' => $authData, '$authData->hmac' => $authData->hmac]);
+
+                return isset($authData->hmac) ? $authData->hmac : null;
+            },
+
         ];
+
+        ///Log::info('getHmac->Options', ['$options' => $options]);
 
         // Loop through each until we find the HMAC
         foreach ($options as $method => $value) {
@@ -227,6 +257,19 @@ class AuthShopify
         }
 
         return null;
+    }
+
+    private function getAuthDataDb($uniqueAuthId) {
+
+        $shortAuth = DB::table('short_auths')
+                ->select('auth')
+                ->where('id', $uniqueAuthId)
+                ->get()
+                ->first();
+
+        ///Log::info('$shortAuth>>>', ['$shortAuth->auth' => $shortAuth]);
+
+        return $shortAuth->auth;
     }
 
     /**
@@ -256,12 +299,32 @@ class AuthShopify
 
                 return Arr::get($refererQueryParams, 'shop');
             },
+            //Own option
+            DataSource::DB()->toNative() => function () use ($request): ?string {
+
+                if (! $uniqueAuthId = $request->get('short_auth')) {
+                    return null;
+                }
+
+                if (! $authData = $this->getAuthDataDb($uniqueAuthId)) {
+                    return null;
+                }
+                $authData = json_decode($authData);
+
+                ///Log::info('getShopDomainFromRequest()->DbOption', ['$authDataDecoded' => $authData, 'authData' => $authData]);
+
+                return isset($authData->shop) ? $authData->shop : null;
+            },
         ];
 
         // Loop through each until we find the HMAC
         foreach ($options as $method => $value) {
             $result = is_callable($value) ? $value() : $value;
+
+            ///Log::info('GSHDomain->InsideForeach--', ['result' => $result]);
+
             if ($result !== null) {
+                ///Log::info('GSHDomain->InsideForeach->InsideIf--', ['result' => $result, 'RZfromNative' => ShopDomain::fromNative($result)]);
                 // Found a shop
                 return ShopDomain::fromNative($result);
             }
@@ -334,7 +397,34 @@ class AuthShopify
 
                 return $verify;
             },
+            //Own option
+            DataSource::DB()->toNative() => function () use ($request): array {
+
+                if (! $uniqueAuthId = $request->get('short_auth')) {
+                    return null;
+                }
+
+                if (! $authData = $this->getAuthDataDb($uniqueAuthId)) {
+                    return null;
+                }
+                $authData = json_decode($authData);
+
+                ///Log::info('getData->DbOptions', ['$authDataDecoded' => $authData, 'authData' => $authData]);
+
+
+                $verify = [];
+                if (!isset($authData)) return $verify;
+
+                foreach ($authData as $key => $value) {
+                    $verify[$key] = $this->parseDataSourceValue($value);
+                }
+
+                return $verify;
+            },
+
         ];
+
+        ///Log::info('getData->Options', ['$options' => $options]);
 
         return $options[$source]();
     }
@@ -352,7 +442,8 @@ class AuthShopify
     private function handleBadVerification(Request $request, ShopDomainValue $domain)
     {
         if ($domain->isNull()) {
-            // We have no idea of knowing who this is, this should not happen
+            // We have no idea of knowing who this is, this should not happen  
+            //redirect()->route('home');   
             throw new MissingShopDomainException();
         }
 
@@ -362,6 +453,8 @@ class AuthShopify
         // Kill off anything to do with the session
         $this->shopSession->forget();
 
+        ///Log::info('handleBadVerification->', ['$request->fullUrl()' => $request->fullUrl()]);
+        
         // Mis-match of shops
         return Redirect::route(
             getShopifyConfig('route_names.authenticate.oauth'),

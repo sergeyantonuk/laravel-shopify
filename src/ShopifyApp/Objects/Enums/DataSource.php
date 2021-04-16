@@ -36,4 +36,11 @@ final class DataSource implements ValueObject
      * @var int
      */
     public const REFERER = 2;
+
+    /**
+     * My own option
+     *
+     * @var int
+     */
+    public const DB = 3;
 }

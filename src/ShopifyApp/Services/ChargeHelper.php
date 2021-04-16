@@ -13,6 +13,9 @@ use Osiset\ShopifyApp\Objects\Values\ChargeReference;
 use Osiset\ShopifyApp\Objects\Values\PlanId;
 use Osiset\ShopifyApp\Storage\Models\Charge as ChargeModel;
 use Osiset\ShopifyApp\Storage\Models\Plan;
+use Log;
+use DB;
+//use Osiset\ShopifyApp\Contracts\Objects\Values\ShopId as ShopIdValue;
 
 /**
  * Basic helper class for charges which encapsulates
@@ -252,9 +255,14 @@ class ChargeHelper
      */
     public function details(Plan $plan, IShopModel $shop): PlanDetailsTransfer
     {
+        $uniqueAuthId = '';
+        if (isset($_GET['hmac'])) {
+            $uniqueAuthId = $this->storeAuthDataDb(json_encode($_GET));
+        }
+
         // Handle capped amounts for UsageCharge API
         $isCapped = isset($plan->capped_amount) && $plan->capped_amount > 0;
-
+        ///Log::info('ChargeHelper->Details()', ['$_GET' => $_GET]);
         // Build the details object
         $transfer = new PlanDetailsTransfer();
         $transfer->name = $plan->name;
@@ -267,7 +275,9 @@ class ChargeHelper
         $transfer->returnUrl = URL::secure(
             getShopifyConfig('billing_redirect'),
             ['plan' => $plan->getId()->toNative()]
-        );
+        ) . '?short_auth=' . $uniqueAuthId;
+
+        ///Log::info('ChargeHelper->Details()', ['$transfer->returnUrl' => $transfer->returnUrl]);
 
         return $transfer;
     }
@@ -300,5 +310,18 @@ class ChargeHelper
         }
 
         return $result;
+    }
+
+    protected function storeAuthDataDb($authData)
+    {
+        $uniqueAuthId = md5(time());
+        
+        DB::table('short_auths')->insert([
+            'id' => $uniqueAuthId,
+            'auth' => $authData
+        ]);
+
+        //Log::info('StoreAuthData()', ['Shop' => $shop, 'ShopId' => $shop->getId()]);
+        return $uniqueAuthId;
     }
 }
